@@ -13,7 +13,6 @@ const afterPack = require('./build-after-pack')
  * Debug 版默认禁用自动更新，避免把调试版本升级为正式版。
  */
 const isDebugBuild = process.env.DEBUG_BUILD === '1'
-const debugSuffix = isDebugBuild ? '-debug' : ''
 
 /**
  * @type {import('electron-builder').Configuration}
@@ -24,7 +23,8 @@ const options = {
   productName: isDebugBuild ? 'lx-music-desktop-debug' : 'lx-music-desktop',
   beforePack,
   afterPack,
-  protocols: {
+  // Debug 版不注册 lxmusic:// 协议，避免与正式版抢占系统默认处理程序
+  protocols: isDebugBuild ? undefined : {
     name: 'lx-music-protocol',
     schemes: [
       'lxmusic',

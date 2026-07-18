@@ -143,13 +143,17 @@ export const setUserDataPath = () => {
 }
 
 export const registerDeeplink = (startApp: () => void) => {
-  if (process.env.NODE_ENV !== 'production' && process.platform === 'win32') {
-    // Set the path of electron.exe and your app.
-    // These two additional parameters are only available on windows.
-    // console.log(process.execPath, process.argv)
-    app.setAsDefaultProtocolClient('lxmusic', process.execPath, process.argv.slice(1))
-  } else {
-    app.setAsDefaultProtocolClient('lxmusic')
+  // Debug 构建版不注册 lxmusic:// 协议，避免抢占正式版的深链接处理程序
+  // （审查指出：appId/productName 不同但协议名相同仍会互相覆盖系统默认处理程序）
+  if (process.env.DEBUG_BUILD !== '1') {
+    if (process.env.NODE_ENV !== 'production' && process.platform === 'win32') {
+      // Set the path of electron.exe and your app.
+      // These two additional parameters are only available on windows.
+      // console.log(process.execPath, process.argv)
+      app.setAsDefaultProtocolClient('lxmusic', process.execPath, process.argv.slice(1))
+    } else {
+      app.setAsDefaultProtocolClient('lxmusic')
+    }
   }
 
   // deep link

@@ -37,6 +37,7 @@ module.exports = merge(baseConfig, {
     new webpack.DefinePlugin({
       'process.env': {
         NODE_ENV: '"production"',
+        // 注入 DEBUG_BUILD 让运行时主进程也能识别 Debug 构建版（如跳过协议注册）
         DEBUG_BUILD: process.env.DEBUG_BUILD === '1' ? '"1"' : '"0"',
       },
     }),

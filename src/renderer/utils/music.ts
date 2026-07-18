@@ -1,4 +1,5 @@
 import { checkPath, joinPath, extname, basename, readFile, getFileStats } from '@common/utils/nodejs'
+import { DOWNLOAD_STATUS } from '@common/constants'
 import { formatPlayTime } from '@common/utils/common'
 import { decodeKrc } from '@common/utils/lyricUtils/kg'
 import { type IAudioMetadata } from 'music-metadata'
@@ -25,11 +26,40 @@ export const checkMusicFileAvailable = async(musicInfo: LX.Music.MusicInfo | LX.
   } else return true
 }
 
+// 文件被认为是"可用"的最小字节数，与下载侧 skipExistFile 的判定阈值一致。
+const MIN_VALID_FILE_SIZE = 100
+
+/**
+ * 获取已下载音乐文件的本地路径。
+ *
+ * 按需自愈：当 status=COMPLETED 但 isComplate=false（如下载完成事件后 100ms throttle
+ * 窗口内崩溃导致标志丢失）时，若文件实际存在且非空，立即回填 isComplate=true 并修正
+ * metadata.filePath，避免首次播放就走在线（审查场景 B / N / D）。
+ * 内存对象的修改会被后续 throttleUpdateTask 持久化，或由启动自愈 healDownloadList 兜底。
+ */
 export const getDownloadFilePath = async(musicInfo: LX.Download.ListItem, savePath: string): Promise<string> => {
-  if (musicInfo.isComplate && !/\.ape$/.test(musicInfo.metadata.fileName)) {
-    if (await checkPath(musicInfo.metadata.filePath)) return musicInfo.metadata.filePath
-    const path = joinPath(savePath, musicInfo.metadata.fileName)
-    if (await checkPath(path)) return path
+  // ape 格式 Chromium 无法解码，直接返回空走在线
+  if (/\.ape$/.test(musicInfo.metadata.fileName)) return ''
+  // 仅当标志为完成态、或 status=completed 但标志丢失时才尝试本地
+  if (!musicInfo.isComplate && musicInfo.status !== DOWNLOAD_STATUS.COMPLETED) return ''
+
+  let path = ''
+  if (await checkPath(musicInfo.metadata.filePath)) {
+    path = musicInfo.metadata.filePath
+  } else {
+    const joined = joinPath(savePath, musicInfo.metadata.fileName)
+    if (await checkPath(joined)) {
+      path = joined
+      // 修正陈旧的 filePath（配置/歌单改名后）
+      musicInfo.metadata.filePath = joined
+    }
+  }
+  if (path) {
+    // 用 getFileStats 校验文件非空，避免写一半的 0 字节文件被当作可用
+    const stats = await getFileStats(path)
+    if (!stats || stats.size <= MIN_VALID_FILE_SIZE) return ''
+    if (!musicInfo.isComplate) musicInfo.isComplate = true
+    return path
   }
   return ''
 }

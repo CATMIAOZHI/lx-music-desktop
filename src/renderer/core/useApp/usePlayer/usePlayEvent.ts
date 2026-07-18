@@ -6,10 +6,24 @@ import { playNext, setMusicUrl } from '@renderer/core/player'
 import { setAllStatus } from '@renderer/store/player/action'
 import { appSetting } from '@renderer/store/setting'
 
+/**
+ * 判断当前播放项是否为本地候选（已下载项或本地导入项）。
+ * 只有本地候选才适用"本地重试 → 在线回退"语义；
+ * 普通在线歌曲失效时应直接刷新 URL，不能占用本地重试额度。
+ */
+const isLocalCandidate = (info: LX.Music.MusicInfo | LX.Download.ListItem | null | undefined): boolean => {
+  if (!info) return false
+  if ('progress' in info) return true
+  return info.source === 'local'
+}
+
 export default () => {
   const t = useI18n()
-  let retryNum = 0
+  // 在线 URL 刷新次数（仅对在线歌曲生效）
+  let onlineRetryNum = 0
+  // 本地加载失败次数（仅对已下载项 / 本地导入项生效）
   let localRetryNum = 0
+  // 超时事件是否已触发过一次（用于本地候选的 本地重试 → 在线回退 状态机）
   let prevTimeoutId: string | null = null
 
   let loadingTimeout: NodeJS.Timeout | null = null
@@ -24,22 +38,32 @@ export default () => {
         return
       }
 
-      // 如果加载超时，则尝试刷新URL
-      // 审查场景 C：原实现无条件传 isRefresh=true，导致本地文件存在却走在线。
-      // 现在改为：先以 localRetryCount 重试（仍优先本地），累计 2 次后才升级为 isRefresh。
-      if (prevTimeoutId == musicInfo.id) {
+      if (!playMusicInfo.musicInfo) {
         prevTimeoutId = null
-        void playNext(true)
-      } else {
-        prevTimeoutId = musicInfo.id
-        if (playMusicInfo.musicInfo) {
+        return
+      }
+
+      const info = playMusicInfo.musicInfo
+      if (isLocalCandidate(info)) {
+        // 本地候选：本地重试 → 在线回退 → 切歌
+        if (prevTimeoutId == info.id) {
+          // 第二次超时：本地重试已用完仍卡住，回退在线 URL
+          prevTimeoutId = null
+          setMusicUrl(info, true, 0)
+        } else {
+          prevTimeoutId = info.id
           if (localRetryNum < 2) {
             localRetryNum++
-            setMusicUrl(playMusicInfo.musicInfo, false, localRetryNum)
+            setMusicUrl(info, false, localRetryNum)
           } else {
-            setMusicUrl(playMusicInfo.musicInfo, true, 0)
+            // 本地重试已用尽，直接回退在线
+            prevTimeoutId = null
+            setMusicUrl(info, true, 0)
           }
         }
+      } else {
+        // 在线歌曲：URL 失效后强制刷新
+        setMusicUrl(info, true)
       }
     }, 25000)
   }
@@ -96,20 +120,32 @@ export default () => {
     clearLoadingTimeout()
     if (window.lx.isPlayedStop) return
     if (!isEmpty()) setStop()
-    if (playMusicInfo.musicInfo && errCode !== 1 && retryNum < 2) { // 若音频URL无效则尝试刷新2次URL
-      // 审查场景 I：audio 加载失败可能只是本地文件损坏 / 格式不支持 / 路径编码问题。
-      // 原实现直接 setMusicUrl(musicInfo, true) 会让 download.ts 永久跳过本地路径，
-      // 导致"本地有文件却走在线"。现在先以 localRetryCount 重试本地，
-      // 2 次仍失败才升级为 isRefresh=true（强制走在线）。
-      retryNum++
-      if (localRetryNum < 2) {
-        localRetryNum++
-        setMusicUrl(playMusicInfo.musicInfo, false, localRetryNum)
+    if (playMusicInfo.musicInfo && errCode !== 1) {
+      const info = playMusicInfo.musicInfo
+      if (isLocalCandidate(info)) {
+        // 本地候选：先本地重试 2 次，再回退在线 URL，最后切歌
+        if (localRetryNum < 2) {
+          localRetryNum++
+          setMusicUrl(info, false, localRetryNum)
+          setAllStatus(t('player__refresh_url'))
+          return
+        }
+        if (onlineRetryNum < 2) {
+          // 本地重试已用尽，回退在线 URL（最多 2 次）
+          onlineRetryNum++
+          setMusicUrl(info, true, 0)
+          setAllStatus(t('player__refresh_url'))
+          return
+        }
       } else {
-        setMusicUrl(playMusicInfo.musicInfo, true, 0)
+        // 普通在线歌曲：URL 失效后强制刷新 2 次
+        if (onlineRetryNum < 2) {
+          onlineRetryNum++
+          setMusicUrl(info, true)
+          setAllStatus(t('player__refresh_url'))
+          return
+        }
       }
-      setAllStatus(t('player__refresh_url'))
-      return
     }
 
     if (appSetting['player.autoSkipOnError']) {
@@ -124,7 +160,7 @@ export default () => {
   }
 
   const handleSetPlayInfo = () => {
-    retryNum = 0
+    onlineRetryNum = 0
     localRetryNum = 0
     prevTimeoutId = null
     clearDelayNextTimeout()
