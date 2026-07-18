@@ -20,6 +20,10 @@ interface Lx {
     download: DownloadTypes
   }
   isProd: boolean
+  /**
+   * 是否为 Debug 构建（与正式版共存安装用）。
+   */
+  isDebug: boolean
   songListInfo: {
     fromName: string
     searchKey: string | null

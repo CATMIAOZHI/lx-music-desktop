@@ -71,7 +71,8 @@ export default () => {
       sendInited()
 
       handleListAutoUpdate()
-      if (window.lx.isProd && appSetting['common.isAgreePact']) checkUpdate()
+      // Debug 构建版禁用自动更新，避免把调试版本升级为正式版
+      if (window.lx.isProd && !window.lx.isDebug && appSetting['common.isAgreePact']) checkUpdate()
     })
   })
 }

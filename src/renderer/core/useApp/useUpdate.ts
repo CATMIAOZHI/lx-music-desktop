@@ -21,7 +21,7 @@ export default () => {
   // 更新超时定时器
   let updateTimeout: number | null = null
   const startUpdateTimeout = () => {
-    if (window.lx.isProd && !(isWin && process.arch.includes('arm'))) {
+    if (window.lx.isProd && !window.lx.isDebug && !(isWin && process.arch.includes('arm'))) {
       updateTimeout = window.setTimeout(() => {
         updateTimeout = null
         void nextTick(() => {

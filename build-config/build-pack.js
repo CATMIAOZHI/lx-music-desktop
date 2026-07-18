@@ -5,12 +5,23 @@ const beforePack = require('./build-before-pack')
 const afterPack = require('./build-after-pack')
 
 /**
-* @type {import('electron-builder').Configuration}
-* @see https://www.electron.build/configuration/configuration
-*/
+ * 是否构建 Debug 版（用于与正式版共存安装的调试版本）。
+ * 通过 `DEBUG_BUILD=1` 环境变量启用，会覆盖以下字段以实现与正式版共存：
+ * - appId：区分注册表/Bundle ID
+ * - productName：区分安装目录、用户数据目录、可执行名、安装包文件名
+ * - shortcutName：区分开始菜单/桌面快捷方式名
+ * Debug 版默认禁用自动更新，避免把调试版本升级为正式版。
+ */
+const isDebugBuild = process.env.DEBUG_BUILD === '1'
+const debugSuffix = isDebugBuild ? '-debug' : ''
+
+/**
+ * @type {import('electron-builder').Configuration}
+ * @see https://www.electron.build/configuration/configuration
+ */
 const options = {
-  appId: 'cn.toside.music.desktop',
-  productName: 'lx-music-desktop',
+  appId: isDebugBuild ? 'cn.toside.music.desktop.debug' : 'cn.toside.music.desktop',
+  productName: isDebugBuild ? 'lx-music-desktop-debug' : 'lx-music-desktop',
   beforePack,
   afterPack,
   protocols: {
@@ -44,7 +55,7 @@ const options = {
   extraResources: [
     './licenses',
   ],
-  publish: [
+  publish: isDebugBuild ? null : [
     {
       provider: 'github',
       owner: 'lyswhut',
@@ -68,7 +79,7 @@ const winOptions = {
     allowToChangeInstallationDirectory: true,
     // differentialPackage: true,
     license: './licenses/license.rtf',
-    shortcutName: 'LX Music',
+    shortcutName: isDebugBuild ? 'LX Music Debug' : 'LX Music',
   },
 }
 /**

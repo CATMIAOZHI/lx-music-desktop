@@ -37,6 +37,7 @@ module.exports = merge(baseConfig, {
     new webpack.DefinePlugin({
       'process.env': {
         NODE_ENV: '"production"',
+        DEBUG_BUILD: process.env.DEBUG_BUILD === '1' ? '"1"' : '"0"',
       },
     }),
   ],
