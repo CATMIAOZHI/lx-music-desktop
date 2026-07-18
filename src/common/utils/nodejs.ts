@@ -23,6 +23,10 @@ export const checkPath = async(path: string): Promise<boolean> => {
     }
     fs.access(path, fs.constants.F_OK, err => {
       if (err) {
+        // 审查场景 E1：权限不足（EACCES）等非"不存在"错误统一被当 false，
+        // 会导致"文件存在但走在线"。此处打印 warn 便于诊断；返回值保持 false
+        // （权限不足时本地确实不可用）。
+        if (err.code !== 'ENOENT') console.warn('checkPath access error:', path, err.code, err.message)
         resolve(false)
         return
       }

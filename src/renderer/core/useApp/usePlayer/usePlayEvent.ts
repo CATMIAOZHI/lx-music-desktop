@@ -9,6 +9,7 @@ import { appSetting } from '@renderer/store/setting'
 export default () => {
   const t = useI18n()
   let retryNum = 0
+  let localRetryNum = 0
   let prevTimeoutId: string | null = null
 
   let loadingTimeout: NodeJS.Timeout | null = null
@@ -24,12 +25,21 @@ export default () => {
       }
 
       // 如果加载超时，则尝试刷新URL
+      // 审查场景 C：原实现无条件传 isRefresh=true，导致本地文件存在却走在线。
+      // 现在改为：先以 localRetryCount 重试（仍优先本地），累计 2 次后才升级为 isRefresh。
       if (prevTimeoutId == musicInfo.id) {
         prevTimeoutId = null
         void playNext(true)
       } else {
         prevTimeoutId = musicInfo.id
-        if (playMusicInfo.musicInfo) setMusicUrl(playMusicInfo.musicInfo, true)
+        if (playMusicInfo.musicInfo) {
+          if (localRetryNum < 2) {
+            localRetryNum++
+            setMusicUrl(playMusicInfo.musicInfo, false, localRetryNum)
+          } else {
+            setMusicUrl(playMusicInfo.musicInfo, true, 0)
+          }
+        }
       }
     }, 25000)
   }
@@ -87,9 +97,17 @@ export default () => {
     if (window.lx.isPlayedStop) return
     if (!isEmpty()) setStop()
     if (playMusicInfo.musicInfo && errCode !== 1 && retryNum < 2) { // 若音频URL无效则尝试刷新2次URL
-      // console.log(this.retryNum)
+      // 审查场景 I：audio 加载失败可能只是本地文件损坏 / 格式不支持 / 路径编码问题。
+      // 原实现直接 setMusicUrl(musicInfo, true) 会让 download.ts 永久跳过本地路径，
+      // 导致"本地有文件却走在线"。现在先以 localRetryCount 重试本地，
+      // 2 次仍失败才升级为 isRefresh=true（强制走在线）。
       retryNum++
-      setMusicUrl(playMusicInfo.musicInfo, true)
+      if (localRetryNum < 2) {
+        localRetryNum++
+        setMusicUrl(playMusicInfo.musicInfo, false, localRetryNum)
+      } else {
+        setMusicUrl(playMusicInfo.musicInfo, true, 0)
+      }
       setAllStatus(t('player__refresh_url'))
       return
     }
@@ -107,6 +125,7 @@ export default () => {
 
   const handleSetPlayInfo = () => {
     retryNum = 0
+    localRetryNum = 0
     prevTimeoutId = null
     clearDelayNextTimeout()
     clearLoadingTimeout()

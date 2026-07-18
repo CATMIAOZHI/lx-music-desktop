@@ -23,19 +23,26 @@ export const getMusicUrl = async({
   musicInfo,
   quality,
   isRefresh = false,
+  localRetryCount = 0,
   onToggleSource,
   allowToggleSource,
 }: {
   musicInfo: LX.Music.MusicInfo | LX.Download.ListItem
   isRefresh?: boolean
+  /**
+   * 本地加载失败的重试次数（仅对已下载项 / 本地导入项有效）。
+   * 在阈值内仍优先尝试本地路径，避免 audio error 一次就永久回退在线。
+   * 见审查场景 C / I。
+   */
+  localRetryCount?: number
   quality?: LX.Quality
   onToggleSource?: (musicInfo?: LX.Music.MusicInfoOnline) => void
   allowToggleSource?: boolean
 }): Promise<string> => {
   if ('progress' in musicInfo) {
-    return getDownloadMusicUrl({ musicInfo, isRefresh, onToggleSource, allowToggleSource })
+    return getDownloadMusicUrl({ musicInfo, isRefresh, localRetryCount, onToggleSource, allowToggleSource })
   } else if (musicInfo.source == 'local') {
-    return getLocalMusicUrl({ musicInfo, isRefresh, onToggleSource, allowToggleSource })
+    return getLocalMusicUrl({ musicInfo, isRefresh, localRetryCount, onToggleSource, allowToggleSource })
   } else {
     return getOnlineMusicUrl({ musicInfo, isRefresh, quality, onToggleSource, allowToggleSource })
   }

@@ -30,8 +30,16 @@ const toDBDownloadInfo = (musicInfos: LX.Download.ListItem[], offset: number = 0
 }
 
 const initDownloadList = () => {
-  list = queryDownloadList().map(item => {
-    const musicInfo = JSON.parse(item.musicInfo) as LX.Music.MusicInfoOnline
+  list = queryDownloadList().map((item) => {
+    // 审查场景 J：单条 musicInfo JSON 损坏不应导致整列表加载失败。
+    // 跳过损坏项并记录日志，避免用户被迫整体回退在线。
+    let musicInfo: LX.Music.MusicInfoOnline
+    try {
+      musicInfo = JSON.parse(item.musicInfo) as LX.Music.MusicInfoOnline
+    } catch (err) {
+      console.error('parse download item musicInfo failed, skip item:', item.id, err)
+      return null
+    }
     return {
       id: item.id,
       isComplate: item.isComplate == 1,
@@ -51,7 +59,7 @@ const initDownloadList = () => {
         filePath: item.filePath,
       },
     }
-  })
+  }).filter((item): item is LX.Download.ListItem => item != null)
 }
 
 /**

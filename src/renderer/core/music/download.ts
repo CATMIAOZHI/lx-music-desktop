@@ -1,4 +1,5 @@
 import { getDownloadFilePath } from '@renderer/utils/music'
+import { toFileUrl } from '@common/utils/electron'
 
 import {
   getMusicUrl as getOnlineMusicUrl,
@@ -8,15 +9,22 @@ import {
 import { buildLyricInfo, getCachedLyricInfo } from './utils'
 import { buildSavePath } from '@renderer/store/download/utils'
 
-export const getMusicUrl = async({ musicInfo, isRefresh, allowToggleSource = true, onToggleSource = () => {} }: {
+export const getMusicUrl = async({ musicInfo, isRefresh, localRetryCount = 0, allowToggleSource = true, onToggleSource = () => {} }: {
   musicInfo: LX.Download.ListItem
   isRefresh: boolean
+  /**
+   * 本地加载失败的重试次数。audio error / 加载超时触发的重试会传入此值。
+   * 在达到阈值前仍优先尝试本地文件，避免一次加载失败就永久回退在线。
+   * 见审查场景 C / I：原实现 isRefresh=true 时无条件跳过本地路径检查。
+   */
+  localRetryCount?: number
   onToggleSource?: (musicInfo?: LX.Music.MusicInfoOnline) => void
   allowToggleSource?: boolean
 }): Promise<string> => {
-  if (!isRefresh) {
+  // 本地优先：仅在用户显式刷新或本地多次加载失败后才跳过本地路径
+  if (!isRefresh && localRetryCount < 2) {
     const path = await getDownloadFilePath(musicInfo, buildSavePath(musicInfo))
-    if (path) return path
+    if (path) return toFileUrl(path)
   }
 
   return getOnlineMusicUrl({ musicInfo: musicInfo.metadata.musicInfo, isRefresh, onToggleSource, allowToggleSource })

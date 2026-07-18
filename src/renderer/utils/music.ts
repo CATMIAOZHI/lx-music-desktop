@@ -35,6 +35,12 @@ export const getDownloadFilePath = async(musicInfo: LX.Download.ListItem, savePa
 }
 
 export const getLocalFilePath = async(musicInfo: LX.Music.MusicInfoLocal): Promise<string> => {
+  // 审查场景 H：filePath 为空时 checkPath('') 返回 false 会静默回退在线搜索，
+  // 违反用户"播放本地文件"的意图。显式 warn 以便诊断。
+  if (!musicInfo.meta.filePath) {
+    console.warn('local musicInfo.meta.filePath is empty, will fall back to online search:', musicInfo.id)
+    return ''
+  }
   return (await checkPath(musicInfo.meta.filePath)) ? musicInfo.meta.filePath : ''
 }
 

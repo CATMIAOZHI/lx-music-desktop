@@ -14,6 +14,7 @@ import { appSetting } from '../setting'
 import { qualityList } from '..'
 import { proxyCallback } from '@renderer/worker/utils'
 import { arrPush, arrUnshift, joinPath } from '@renderer/utils'
+import { getFileStats } from '@common/utils/nodejs'
 import { DOWNLOAD_STATUS } from '@common/constants'
 import { proxy } from '../index'
 import { buildSavePath } from './utils'
@@ -36,6 +37,59 @@ const runingTask = new Map<string, LX.Download.ListItem>()
 //   downloadList.splice(0, downloadList.length, ...list)
 // }
 
+/**
+ * 启动时一致性自愈。
+ *
+ * 审查场景 B / D / N / E3 / L / P：
+ * - 下载完成事件后 100ms throttle 窗口内崩溃 → DB 中 isComplate=0 但文件已落盘
+ * - metadata.filePath 持久化后未更新，配置/歌单改名导致路径陈旧
+ * - 跨平台迁移时分隔符不一致
+ *
+ * 策略：对每个 status=completed 项，优先用当前 buildSavePath + fileName 重算路径校验文件存在；
+ * 若命中则把 isComplate 置 true 并 updateFilePath 到当前路径（渐进修复陈旧路径）。
+ * 若新路径未命中但记录的 filePath 存在 → 仍补 isComplate=true（保留旧路径）。
+ * 文件确实不存在 → 保持 isComplate=false，让 filterMusicList 自然排除。
+ *
+ * 阈值 100 字节与 download.ts skipExistFile 的判定一致，避免空文件/写一半的文件被误判为可用。
+ */
+const MIN_VALID_FILE_SIZE = 100
+
+const healDownloadList = async(list: LX.Download.ListItem[]) => {
+  const toUpdate: LX.Download.ListItem[] = []
+  for (const item of list) {
+    if (item.status !== DOWNLOAD_STATUS.COMPLETED) continue
+    if (item.isComplate && item.metadata.filePath) {
+      // 已是完成态：尝试校准陈旧路径（配置/歌单改名后），但不强制
+      const expected = joinPath(buildSavePath(item), item.metadata.fileName)
+      if (expected === item.metadata.filePath) continue
+      const stats = await getFileStats(expected)
+      if (stats && stats.size > MIN_VALID_FILE_SIZE) {
+        item.metadata.filePath = expected
+        toUpdate.push(item)
+      }
+      continue
+    }
+    // status=completed 但 isComplate=false（崩溃窗口丢失标志）
+    const expected = joinPath(buildSavePath(item), item.metadata.fileName)
+    const expectedStats = await getFileStats(expected)
+    if (expectedStats && expectedStats.size > MIN_VALID_FILE_SIZE) {
+      item.isComplate = true
+      item.metadata.filePath = expected
+      toUpdate.push(item)
+      continue
+    }
+    // 新路径没有，但记录的旧路径仍有文件
+    if (item.metadata.filePath) {
+      const oldStats = await getFileStats(item.metadata.filePath)
+      if (oldStats && oldStats.size > MIN_VALID_FILE_SIZE) {
+        item.isComplate = true
+        toUpdate.push(item)
+      }
+    }
+  }
+  if (toUpdate.length) throttleUpdateTask(toUpdate)
+}
+
 export const getDownloadList = async(): Promise<LX.Download.ListItem[]> => {
   if (!downloadList.length) {
     const list = await downloadTasksGet()
@@ -51,6 +105,8 @@ export const getDownloadList = async(): Promise<LX.Download.ListItem[]> => {
       }
     }
     arrPush(downloadList, list)
+    // 启动自愈：异步执行不阻塞列表加载，避免拖慢启动
+    void healDownloadList(list)
   }
   return downloadList
 }

@@ -1,4 +1,4 @@
-import { encodePath } from '@common/utils/common'
+import { toFileUrl } from '@common/utils/electron'
 import { updateListMusics } from '@renderer/store/list/action'
 import { saveLyric, saveMusicUrl } from '@renderer/utils/ipc'
 import { getLocalFilePath } from '@renderer/utils/music'
@@ -66,15 +66,20 @@ const getOtherSourceByLocal = async<T>(musicInfo: LX.Music.MusicInfoLocal, handl
   throw new Error('source not found')
 }
 
-export const getMusicUrl = async({ musicInfo, isRefresh, allowToggleSource = true, onToggleSource = () => {} }: {
+export const getMusicUrl = async({ musicInfo, isRefresh, localRetryCount = 0, allowToggleSource = true, onToggleSource = () => {} }: {
   musicInfo: LX.Music.MusicInfoLocal
   isRefresh: boolean
+  /**
+   * 本地加载失败的重试次数。audio error / 加载超时触发的重试会传入此值。
+   * 在达到阈值前仍优先尝试本地文件，避免一次加载失败就永久回退在线。
+   */
+  localRetryCount?: number
   allowToggleSource?: boolean
   onToggleSource?: (musicInfo?: LX.Music.MusicInfoOnline) => void
 }): Promise<string> => {
-  if (!isRefresh) {
+  if (!isRefresh && localRetryCount < 2) {
     const path = await getLocalFilePath(musicInfo)
-    if (path) return encodePath(path)
+    if (path) return toFileUrl(path)
   }
 
   try {
