@@ -32,10 +32,17 @@ export const checkMusicFileAvailable = async(musicInfo: LX.Music.MusicInfo | LX.
  * 仅本地候选适用"本地重试 → 在线回退"重试语义；
  * 普通在线歌曲失效时应直接刷新 URL，不能占用本地重试额度。
  * 见 usePlayEvent.ts 重试状态机。
+ *
+ * 注意：下载任务必须处于完成态（isComplate 或 status=COMPLETED）才算本地候选。
+ * RUN / PAUSE 状态的任务文件尚不完整，getDownloadFilePath 必然返回空，
+ * 若被当作本地候选会让重试状态机以 isRefresh=false 请求在线 URL，
+ * 前几次错误不会强制刷新失效 URL。
  */
 export const isLocalCandidate = (info: LX.Music.MusicInfo | LX.Download.ListItem | null | undefined): boolean => {
   if (!info) return false
-  if ('progress' in info) return true
+  if ('progress' in info) {
+    return info.isComplate || info.status === DOWNLOAD_STATUS.COMPLETED
+  }
   return info.source === 'local'
 }
 
@@ -49,15 +56,26 @@ export const MIN_VALID_FILE_SIZE = 100
  * 按需自愈：当 status=COMPLETED 但 isComplate=false（如下载完成事件后 100ms throttle
  * 窗口内崩溃导致标志丢失）时，若文件实际存在且非空，立即回填 isComplate=true 并修正
  * metadata.filePath，避免首次播放就走在线（审查场景 B / N / D）。
- * 内存对象的修改会被后续 throttleUpdateTask 持久化，或由启动自愈 healDownloadList 兜底。
+ *
+ * 返回 { path, healed }：
+ * - path：可用的本地文件绝对路径，无可用文件时为空字符串
+ * - healed：是否触发了自愈（回填 isComplate 或修正 filePath）
+ *
+ * 调用方应在 healed=true 时显式调用 downloadTasksUpdate 持久化，
+ * 不要依赖"后续可能出现的其他更新"——审查 P2 指出 healDownloadList 看到内存
+ * isComplate=true 后会跳过更新，导致 DB 仍是旧值。
  */
-export const getDownloadFilePath = async(musicInfo: LX.Download.ListItem, savePath: string): Promise<string> => {
+export const getDownloadFilePath = async(
+  musicInfo: LX.Download.ListItem,
+  savePath: string,
+): Promise<{ path: string, healed: boolean }> => {
   // ape 格式 Chromium 无法解码，直接返回空走在线
-  if (/\.ape$/.test(musicInfo.metadata.fileName)) return ''
+  if (/\.ape$/.test(musicInfo.metadata.fileName)) return { path: '', healed: false }
   // 仅当标志为完成态、或 status=completed 但标志丢失时才尝试本地
-  if (!musicInfo.isComplate && musicInfo.status !== DOWNLOAD_STATUS.COMPLETED) return ''
+  if (!musicInfo.isComplate && musicInfo.status !== DOWNLOAD_STATUS.COMPLETED) return { path: '', healed: false }
 
   let path = ''
+  let filePathChanged = false
   if (await checkPath(musicInfo.metadata.filePath)) {
     path = musicInfo.metadata.filePath
   } else {
@@ -66,16 +84,22 @@ export const getDownloadFilePath = async(musicInfo: LX.Download.ListItem, savePa
       path = joined
       // 修正陈旧的 filePath（配置/歌单改名后）
       musicInfo.metadata.filePath = joined
+      filePathChanged = true
     }
   }
   if (path) {
     // 用 getFileStats 校验文件非空，避免写一半的 0 字节文件被当作可用
     const stats = await getFileStats(path)
-    if (!stats || stats.size <= MIN_VALID_FILE_SIZE) return ''
-    if (!musicInfo.isComplate) musicInfo.isComplate = true
-    return path
+    if (!stats || stats.size <= MIN_VALID_FILE_SIZE) return { path: '', healed: false }
+    let healed = false
+    if (!musicInfo.isComplate) {
+      musicInfo.isComplate = true
+      healed = true
+    }
+    if (filePathChanged) healed = true
+    return { path, healed }
   }
-  return ''
+  return { path: '', healed: false }
 }
 
 export const getLocalFilePath = async(musicInfo: LX.Music.MusicInfoLocal): Promise<string> => {
@@ -97,7 +121,7 @@ export const getLocalFilePath = async(musicInfo: LX.Music.MusicInfoLocal): Promi
  */
 export const getMusicFilePath = async(musicInfo: LX.Music.MusicInfo | LX.Download.ListItem, savePath: string): Promise<string> => {
   if ('progress' in musicInfo) {
-    return getDownloadFilePath(musicInfo, savePath)
+    return (await getDownloadFilePath(musicInfo, savePath)).path
   } else if (musicInfo.source == 'local') {
     return getLocalFilePath(musicInfo)
   }

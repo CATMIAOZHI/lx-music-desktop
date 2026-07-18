@@ -16,7 +16,7 @@ export default defineConfig({
     // 测试环境：用 node，因为被测纯函数依赖 node:url / node:fs
     environment: 'node',
     globals: false,
-    // 避免 watch 模式
-    run: true,
+    // 不在此处设置 run: true —— npm test 脚本用 `vitest run` 保证 CI 单次运行，
+    // test:watch 脚本用 `vitest` 进入 watch 模式，全局 run:true 会让 watch 失效。
   },
 })

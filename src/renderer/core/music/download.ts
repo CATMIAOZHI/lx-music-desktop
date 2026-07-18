@@ -1,5 +1,6 @@
 import { getDownloadFilePath } from '@renderer/utils/music'
 import { toFileUrl } from '@common/utils/electron'
+import { downloadTasksUpdate } from '@renderer/utils/ipc'
 
 import {
   getMusicUrl as getOnlineMusicUrl,
@@ -8,6 +9,15 @@ import {
 } from './online'
 import { buildLyricInfo, getCachedLyricInfo } from './utils'
 import { buildSavePath } from '@renderer/store/download/utils'
+
+/**
+ * 按需自愈命中时显式持久化，避免依赖"后续可能出现的其他更新"。
+ * 审查 P2：healDownloadList 看到内存 isComplate=true 后会跳过更新，
+ * 导致 DB 仍是旧值、下次启动还会再次自愈。
+ */
+const persistHealed = (musicInfo: LX.Download.ListItem) => {
+  void downloadTasksUpdate([musicInfo])
+}
 
 export const getMusicUrl = async({ musicInfo, isRefresh, localRetryCount = 0, allowToggleSource = true, onToggleSource = () => {} }: {
   musicInfo: LX.Download.ListItem
@@ -23,7 +33,8 @@ export const getMusicUrl = async({ musicInfo, isRefresh, localRetryCount = 0, al
 }): Promise<string> => {
   // 本地优先：仅在用户显式刷新或本地多次加载失败后才跳过本地路径
   if (!isRefresh && localRetryCount < 2) {
-    const path = await getDownloadFilePath(musicInfo, buildSavePath(musicInfo))
+    const { path, healed } = await getDownloadFilePath(musicInfo, buildSavePath(musicInfo))
+    if (healed) persistHealed(musicInfo)
     if (path) return toFileUrl(path)
   }
 
@@ -37,7 +48,8 @@ export const getPicUrl = async({ musicInfo, isRefresh, listId, onToggleSource = 
   onToggleSource?: (musicInfo?: LX.Music.MusicInfoOnline) => void
 }): Promise<string> => {
   if (!isRefresh) {
-    const path = await getDownloadFilePath(musicInfo, buildSavePath(musicInfo))
+    const { path, healed } = await getDownloadFilePath(musicInfo, buildSavePath(musicInfo))
+    if (healed) persistHealed(musicInfo)
     if (path) {
       const pic = await window.lx.worker.main.getMusicFilePic(path)
       if (pic) return pic
@@ -70,7 +82,8 @@ export const getLyricInfo = async({ musicInfo, isRefresh, onToggleSource = () =>
     onToggleSource,
   }).catch(async() => {
     // 尝试读取文件内歌词
-    const path = await getDownloadFilePath(musicInfo, buildSavePath(musicInfo))
+    const { path, healed } = await getDownloadFilePath(musicInfo, buildSavePath(musicInfo))
+    if (healed) persistHealed(musicInfo)
     if (path) {
       const rawlrcInfo = await window.lx.worker.main.getMusicFileLyric(path)
       if (rawlrcInfo) return buildLyricInfo(rawlrcInfo)

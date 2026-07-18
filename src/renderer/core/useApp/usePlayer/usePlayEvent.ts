@@ -13,8 +13,10 @@ export default () => {
   let onlineRetryNum = 0
   // 本地加载失败次数（仅对已下载项 / 本地导入项生效）
   let localRetryNum = 0
-  // 超时事件是否已触发过一次（用于本地候选的 本地重试 → 在线回退 状态机）
-  let prevTimeoutId: string | null = null
+  // 本地候选的本地超时重试次数（与 localRetryNum 分开，避免与 error 事件互相干扰）
+  let localTimeoutRetryNum = 0
+  // 本地候选回退在线后的在线超时刷新次数
+  let onlineTimeoutRetryNum = 0
 
   let loadingTimeout: NodeJS.Timeout | null = null
   let delayNextTimeout: NodeJS.Timeout | null = null
@@ -23,37 +25,34 @@ export default () => {
     clearLoadingTimeout()
     loadingTimeout = setTimeout(() => {
       if (window.lx.isPlayedStop) {
-        prevTimeoutId = null
         setAllStatus('')
         return
       }
 
       if (!playMusicInfo.musicInfo) {
-        prevTimeoutId = null
         return
       }
 
       const info = playMusicInfo.musicInfo
       if (isLocalCandidate(info)) {
-        // 本地候选：本地重试 → 在线回退 → 切歌
-        if (prevTimeoutId == info.id) {
-          // 第二次超时：本地重试已用完仍卡住，回退在线 URL
-          prevTimeoutId = null
+        // 本地候选：本地重试 1 次 → 回退在线 → 在线刷新最多 2 次 → 切歌
+        if (localTimeoutRetryNum < 1) {
+          localTimeoutRetryNum++
+          setMusicUrl(info, false, localTimeoutRetryNum)
+        } else if (onlineTimeoutRetryNum < 2) {
+          onlineTimeoutRetryNum++
           setMusicUrl(info, true, 0)
         } else {
-          prevTimeoutId = info.id
-          if (localRetryNum < 2) {
-            localRetryNum++
-            setMusicUrl(info, false, localRetryNum)
-          } else {
-            // 本地重试已用尽，直接回退在线
-            prevTimeoutId = null
-            setMusicUrl(info, true, 0)
-          }
+          void playNext(true)
         }
       } else {
-        // 在线歌曲：URL 失效后强制刷新
-        setMusicUrl(info, true)
+        // 在线歌曲：URL 强制刷新最多 2 次，仍超时则切歌
+        if (onlineTimeoutRetryNum < 2) {
+          onlineTimeoutRetryNum++
+          setMusicUrl(info, true)
+        } else {
+          void playNext(true)
+        }
       }
     }, 25000)
   }
@@ -94,6 +93,9 @@ export default () => {
   const handlePlaying = () => {
     setAllStatus('')
     clearLoadingTimeout()
+    // 成功播放后清零超时计数，避免同一首歌卡顿恢复后历史计数残留
+    localTimeoutRetryNum = 0
+    onlineTimeoutRetryNum = 0
   }
 
   const handleEmpied = () => {
@@ -152,7 +154,8 @@ export default () => {
   const handleSetPlayInfo = () => {
     onlineRetryNum = 0
     localRetryNum = 0
-    prevTimeoutId = null
+    localTimeoutRetryNum = 0
+    onlineTimeoutRetryNum = 0
     clearDelayNextTimeout()
     clearLoadingTimeout()
   }

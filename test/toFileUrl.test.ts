@@ -11,6 +11,10 @@ import { toFileUrl } from '../src/common/utils/fileUrl'
  * 对应审查场景 F / E3：原实现 download.ts 直接返回原始路径、local.ts 仅 encodePath
  * （只转义 % 和 #），路径含 ? / 空格 / 中文时 audio 加载失败被当作 URL 失效走在线。
  * 第一轮修复用手动 encodeURI 仍漏掉 # 和 ?，第二轮改用 Node pathToFileURL。
+ *
+ * 注意：pathToFileURL 按当前进程平台解析路径。Windows 盘符 / UNC 路径仅在
+ * Windows 平台能被识别为绝对路径，因此相关用例用 itWindows 守卫，
+ * 避免 Ubuntu CI 上因路径被当作相对 POSIX 路径而断言失败。
  */
 describe('toFileUrl', () => {
   it('空字符串返回空', () => {
@@ -46,22 +50,6 @@ describe('toFileUrl', () => {
     expect(/%E[0-9A-F]/.test(url)).toBe(true)
   })
 
-  it('Windows 盘符路径生成 file:///C:/... 形式', () => {
-    const winPath = 'C:\\Users\\test\\song.mp3'
-    const url = toFileUrl(winPath)
-    expect(url).toBe(pathToFileURL(winPath).href)
-    // 仅在非 Windows 上验证形式，Windows 上 pathToFileURL 也会产出 file:///C:/...
-    expect(url).toMatch(/^file:\/\/\/C:\//)
-  })
-
-  it('UNC 路径生成 file://server/share/... 形式', () => {
-    const uncPath = '\\\\server\\share\\a#b.mp3'
-    const url = toFileUrl(uncPath)
-    expect(url).toBe(pathToFileURL(uncPath).href)
-    expect(url).toMatch(/^file:\/\/server\/share\//)
-    expect(url).toMatch(/a%23b\.mp3$/)
-  })
-
   it('与 Node pathToFileURL 完全等价（随机特殊字符）', () => {
     const cases = [
       'a+b.mp3',
@@ -75,5 +63,25 @@ describe('toFileUrl', () => {
       const p = path.join(os.tmpdir(), name)
       expect(toFileUrl(p)).toBe(pathToFileURL(p).href)
     }
+  })
+
+  // Windows 专用路径用例：pathToFileURL 仅在 win32 平台识别盘符 / UNC 路径。
+  // Ubuntu CI 上这些字符串会被当作带反斜杠的相对 POSIX 路径，断言必然失败。
+  // 改为矩阵 CI（ubuntu + windows）后，这些用例只在 windows-latest 上执行。
+  const itWindows = process.platform === 'win32' ? it : it.skip
+
+  itWindows('Windows 盘符路径生成 file:///C:/... 形式', () => {
+    const winPath = 'C:\\Users\\test\\song.mp3'
+    const url = toFileUrl(winPath)
+    expect(url).toBe(pathToFileURL(winPath).href)
+    expect(url).toMatch(/^file:\/\/\/C:\//)
+  })
+
+  itWindows('UNC 路径生成 file://server/share/... 形式', () => {
+    const uncPath = '\\\\server\\share\\a#b.mp3'
+    const url = toFileUrl(uncPath)
+    expect(url).toBe(pathToFileURL(uncPath).href)
+    expect(url).toMatch(/^file:\/\/server\/share\//)
+    expect(url).toMatch(/a%23b\.mp3$/)
   })
 })

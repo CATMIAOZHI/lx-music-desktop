@@ -11,8 +11,11 @@ import { DOWNLOAD_STATUS } from '../src/common/constants'
  * throttle 窗口崩溃导致标志丢失），若文件实际存在且 > 100 字节，立即回填
  * isComplate=true 并修正 metadata.filePath。
  *
+ * 返回 { path, healed }，调用方在 healed=true 时显式触发持久化。
  * 对应审查场景 B / N / D / P：启动自愈异步未完成时的窗口期首次播放，
- * 必须靠此函数即时校验文件，而非依赖 isComplate 标志。
+ * 必须靠此函数即时校验文件，而非依赖 isComplate 标志；
+ * 且 healed 必须显式持久化，不能依赖 healDownloadList 兜底（审查 P2 指出
+ * healDownloadList 看到内存 isComplate=true 后会跳过更新）。
  */
 describe('getDownloadFilePath', () => {
   let tmpDir: string
@@ -59,39 +62,51 @@ describe('getDownloadFilePath', () => {
     }
   }
 
-  it('文件存在于 metadata.filePath 时返回该路径', async() => {
+  it('文件存在于 metadata.filePath 时返回该路径，healed=false', async() => {
     const item = buildItem()
     makeValidFile(item.metadata.filePath)
     const result = await getDownloadFilePath(item, tmpDir)
-    expect(result).toBe(item.metadata.filePath)
+    expect(result.path).toBe(item.metadata.filePath)
+    expect(result.healed).toBe(false)
     expect(item.isComplate).toBe(true)
   })
 
-  it('metadata.filePath 不存在但 savePath+fileName 存在时返回拼接路径并修正 filePath', async() => {
+  it('metadata.filePath 不存在但 savePath+fileName 存在时返回拼接路径并修正 filePath，healed=true', async() => {
     const item = buildItem({ filePath: path.join(tmpDir, 'old-nonexist.mp3') })
     const realPath = path.join(tmpDir, 'song.mp3')
     makeValidFile(realPath)
     const result = await getDownloadFilePath(item, tmpDir)
-    expect(result).toBe(realPath)
+    expect(result.path).toBe(realPath)
+    expect(result.healed).toBe(true)
     // 自愈：修正陈旧 filePath
     expect(item.metadata.filePath).toBe(realPath)
   })
 
-  it('isComplate=false 且 status=COMPLETED 时按需自愈回填 isComplate', async() => {
+  it('isComplate=false 且 status=COMPLETED 时按需自愈回填 isComplate，healed=true', async() => {
     const item = buildItem({ isComplate: false, status: DOWNLOAD_STATUS.COMPLETED })
     makeValidFile(item.metadata.filePath)
     expect(item.isComplate).toBe(false)
     const result = await getDownloadFilePath(item, tmpDir)
-    expect(result).toBe(item.metadata.filePath)
+    expect(result.path).toBe(item.metadata.filePath)
+    expect(result.healed).toBe(true)
     // 自愈触发
     expect(item.isComplate).toBe(true)
+  })
+
+  it('isComplate=true 且 filePath 已正确时 healed=false（无需自愈）', async() => {
+    const item = buildItem({ isComplate: true })
+    makeValidFile(item.metadata.filePath)
+    const result = await getDownloadFilePath(item, tmpDir)
+    expect(result.path).toBe(item.metadata.filePath)
+    expect(result.healed).toBe(false)
   })
 
   it('isComplate=false 且 status=PAUSE 时不做自愈，返回空走在线', async() => {
     const item = buildItem({ isComplate: false, status: DOWNLOAD_STATUS.PAUSE })
     makeValidFile(item.metadata.filePath)
     const result = await getDownloadFilePath(item, tmpDir)
-    expect(result).toBe('')
+    expect(result.path).toBe('')
+    expect(result.healed).toBe(false)
     expect(item.isComplate).toBe(false)
   })
 
@@ -99,7 +114,8 @@ describe('getDownloadFilePath', () => {
     const item = buildItem({ isComplate: false, status: DOWNLOAD_STATUS.RUN })
     makeValidFile(item.metadata.filePath)
     const result = await getDownloadFilePath(item, tmpDir)
-    expect(result).toBe('')
+    expect(result.path).toBe('')
+    expect(result.healed).toBe(false)
     expect(item.isComplate).toBe(false)
   })
 
@@ -108,15 +124,15 @@ describe('getDownloadFilePath', () => {
     fs.mkdirSync(path.dirname(item.metadata.filePath), { recursive: true })
     fs.writeFileSync(item.metadata.filePath, Buffer.alloc(MIN_VALID_FILE_SIZE - 10, 0))
     const result = await getDownloadFilePath(item, tmpDir)
-    expect(result).toBe('')
+    expect(result.path).toBe('')
   })
 
-  it('文件正好等于最小可用字节数时返回空（边界 >  而非 >=）', async() => {
+  it('文件正好等于最小可用字节数时返回空（边界 > 而非 >=）', async() => {
     const item = buildItem()
     fs.mkdirSync(path.dirname(item.metadata.filePath), { recursive: true })
     fs.writeFileSync(item.metadata.filePath, Buffer.alloc(MIN_VALID_FILE_SIZE, 0))
     const result = await getDownloadFilePath(item, tmpDir)
-    expect(result).toBe('')
+    expect(result.path).toBe('')
   })
 
   it('文件大于最小可用字节数 1 字节时可用（边界）', async() => {
@@ -124,28 +140,31 @@ describe('getDownloadFilePath', () => {
     fs.mkdirSync(path.dirname(item.metadata.filePath), { recursive: true })
     fs.writeFileSync(item.metadata.filePath, Buffer.alloc(MIN_VALID_FILE_SIZE + 1, 0))
     const result = await getDownloadFilePath(item, tmpDir)
-    expect(result).toBe(item.metadata.filePath)
+    expect(result.path).toBe(item.metadata.filePath)
   })
 
   it('ape 格式硬排除：即使文件存在也返回空走在线（Chromium 无法解码 ape）', async() => {
     const item = buildItem({ fileName: 'song.ape', filePath: path.join(tmpDir, 'song.ape') })
     makeValidFile(item.metadata.filePath)
     const result = await getDownloadFilePath(item, tmpDir)
-    expect(result).toBe('')
+    expect(result.path).toBe('')
+    expect(result.healed).toBe(false)
   })
 
   it('文件不存在时返回空', async() => {
     const item = buildItem()
     // 不创建文件
     const result = await getDownloadFilePath(item, tmpDir)
-    expect(result).toBe('')
+    expect(result.path).toBe('')
+    expect(result.healed).toBe(false)
   })
 
   it('ape 格式不触发 isComplate 自愈', async() => {
     const item = buildItem({ fileName: 'song.ape', filePath: path.join(tmpDir, 'song.ape'), isComplate: false })
     makeValidFile(item.metadata.filePath)
     const result = await getDownloadFilePath(item, tmpDir)
-    expect(result).toBe('')
+    expect(result.path).toBe('')
+    expect(result.healed).toBe(false)
     expect(item.isComplate).toBe(false)
   })
 
@@ -153,7 +172,8 @@ describe('getDownloadFilePath', () => {
     const item = buildItem({ fileName: 'song.flac', filePath: path.join(tmpDir, 'song.flac'), isComplate: false })
     makeValidFile(item.metadata.filePath)
     const result = await getDownloadFilePath(item, tmpDir)
-    expect(result).toBe(item.metadata.filePath)
+    expect(result.path).toBe(item.metadata.filePath)
+    expect(result.healed).toBe(true)
     expect(item.isComplate).toBe(true)
   })
 
@@ -161,7 +181,23 @@ describe('getDownloadFilePath', () => {
     const item = buildItem({ fileName: 'song.wav', filePath: path.join(tmpDir, 'song.wav'), isComplate: false })
     makeValidFile(item.metadata.filePath)
     const result = await getDownloadFilePath(item, tmpDir)
-    expect(result).toBe(item.metadata.filePath)
+    expect(result.path).toBe(item.metadata.filePath)
+    expect(result.healed).toBe(true)
     expect(item.isComplate).toBe(true)
+  })
+
+  it('同时回填 isComplate 和修正 filePath 时 healed=true', async() => {
+    const item = buildItem({
+      isComplate: false,
+      status: DOWNLOAD_STATUS.COMPLETED,
+      filePath: path.join(tmpDir, 'stale.mp3'),
+    })
+    const realPath = path.join(tmpDir, 'song.mp3')
+    makeValidFile(realPath)
+    const result = await getDownloadFilePath(item, tmpDir)
+    expect(result.path).toBe(realPath)
+    expect(result.healed).toBe(true)
+    expect(item.isComplate).toBe(true)
+    expect(item.metadata.filePath).toBe(realPath)
   })
 })
