@@ -5,17 +5,7 @@ import { setStop, isEmpty } from '@renderer/plugins/player'
 import { playNext, setMusicUrl } from '@renderer/core/player'
 import { setAllStatus } from '@renderer/store/player/action'
 import { appSetting } from '@renderer/store/setting'
-
-/**
- * 判断当前播放项是否为本地候选（已下载项或本地导入项）。
- * 只有本地候选才适用"本地重试 → 在线回退"语义；
- * 普通在线歌曲失效时应直接刷新 URL，不能占用本地重试额度。
- */
-const isLocalCandidate = (info: LX.Music.MusicInfo | LX.Download.ListItem | null | undefined): boolean => {
-  if (!info) return false
-  if ('progress' in info) return true
-  return info.source === 'local'
-}
+import { isLocalCandidate } from '@renderer/utils/music'
 
 export default () => {
   const t = useI18n()

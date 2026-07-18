@@ -26,8 +26,22 @@ export const checkMusicFileAvailable = async(musicInfo: LX.Music.MusicInfo | LX.
   } else return true
 }
 
+/**
+ * 判断播放项是否为本地候选（已下载项或本地导入项）。
+ *
+ * 仅本地候选适用"本地重试 → 在线回退"重试语义；
+ * 普通在线歌曲失效时应直接刷新 URL，不能占用本地重试额度。
+ * 见 usePlayEvent.ts 重试状态机。
+ */
+export const isLocalCandidate = (info: LX.Music.MusicInfo | LX.Download.ListItem | null | undefined): boolean => {
+  if (!info) return false
+  if ('progress' in info) return true
+  return info.source === 'local'
+}
+
 // 文件被认为是"可用"的最小字节数，与下载侧 skipExistFile 的判定阈值一致。
-const MIN_VALID_FILE_SIZE = 100
+// 导出供测试断言使用
+export const MIN_VALID_FILE_SIZE = 100
 
 /**
  * 获取已下载音乐文件的本地路径。
